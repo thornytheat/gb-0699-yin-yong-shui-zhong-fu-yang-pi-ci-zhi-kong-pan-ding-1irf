@@ -5,6 +5,8 @@ from fastapi.templating import Jinja2Templates
 from app.errors import BusinessError, object_payload
 from app.pipeline import run, sample_text
 from app import store
+from app import ledger
+from app.config import RULE_VERSION
 from app.exporter import evidence_csv
 from app.numbers import display_number
 from pathlib import Path
@@ -13,8 +15,9 @@ app=FastAPI(title='饮用水重复样与批次质控判定')
 app.mount("/static",StaticFiles(directory=Path(__file__).parent/"static"),name="static")
 templates=Jinja2Templates(directory=Path(__file__).parent/"templates")
 templates.env.filters["display_number"]=display_number
-MODULES=['样品接收', '检测项契约', '平行样核对', '加标回收', '空白污染', '批次放行', '复测追踪']
-for n,slug in enumerate(['samples', 'contract', 'parallel', 'spikes', 'blanks', 'release', 'retest'],1):
+MODULES=['样品接收', '检测项契约', '平行样核对', '加标回收', '空白污染', '批次放行', '复测追踪', '期间入账']
+RUN_PAGES=7
+for n,slug in enumerate(['samples', 'contract', 'parallel', 'spikes', 'blanks', 'release', 'retest', 'posting'],1):
     app.include_router(importlib.import_module(f"app.modules.m{n}_{slug}.handler").router)
 @app.exception_handler(BusinessError)
 async def domain_error(request,exc):
@@ -25,10 +28,14 @@ def health(): return {"status":"ok"}
 def home(request:Request): return page(request,1)
 @app.get("/module/{module}",response_class=HTMLResponse)
 def page(request:Request,module:int):
-    if module not in range(1,8): raise BusinessError("MODULE","模块不存在",404)
+    if module not in range(1,9): raise BusinessError("MODULE","模块不存在",404)
     ident=request.query_params.get("run_id")
+    if module==8:
+        record=ledger.get_run(ident) if ident else None
+        replayed=request.query_params.get("replayed")=="1"
+        return templates.TemplateResponse(request=request,name="posting.html",context={"title":'饮用水重复样与批次质控判定',"modules":MODULES,"active":module,"run":None,"run_pages":RUN_PAGES,"rule_version":RULE_VERSION,"overview":ledger.overview(),"record":record,"replayed":replayed})
     item=store.get(ident) if ident else store.save(sample_text(),run(sample_text()))
-    return templates.TemplateResponse(request=request,name="workbench.html",context={"title":'饮用水重复样与批次质控判定',"modules":MODULES,"active":module,"run":item,"report":item["result"]["reports"][module-1]})
+    return templates.TemplateResponse(request=request,name="workbench.html",context={"title":'饮用水重复样与批次质控判定',"modules":MODULES,"active":module,"run":item,"run_pages":RUN_PAGES,"report":item["result"]["reports"][module-1]})
 @app.post("/api/run")
 def calculate(payload:object=Body(default=None)):
     payload=object_payload(payload)
